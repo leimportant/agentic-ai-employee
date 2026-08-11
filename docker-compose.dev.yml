@@ -1,0 +1,60 @@
+# ============================================
+# Docker Compose - Development Override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# ============================================
+version: "3.9"
+
+services:
+  # ─── PostgreSQL (dev ports exposed) ────────
+  postgres:
+    ports:
+      - "5432:5432"
+
+  # ─── Redis (dev ports exposed) ─────────────
+  redis:
+    ports:
+      - "6379:6379"
+
+  # ─── Backend (hot-reload) ──────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: base
+    container_name: agentic-backend-dev
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+      - /app/.venv
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-agentic_ai}
+      REDIS_URL: redis://redis:6379/0
+      DEBUG: "true"
+    ports:
+      - "8000:8000"
+
+  # ─── Frontend (hot-reload) ─────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: deps
+    container_name: agentic-frontend-dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  # ─── Disable Nginx in dev ──────────────────
+  nginx:
+    profiles:
+      - production

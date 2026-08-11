@@ -1,0 +1,99 @@
+# ============================================
+# Deploy Pipeline - VPS Deployment
+# Agentic AI Employee Platform
+# ============================================
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    environment:
+      name: production
+      url: ${{ secrets.PRODUCTION_URL }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+
+            # Navigate to project directory
+            cd ${{ secrets.PROJECT_PATH || '/opt/agentic-ai' }}
+
+            # Pull latest code
+            echo "📥 Pulling latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Build and restart services
+            echo "🐳 Building and starting services..."
+            docker compose pull
+            docker compose build --no-cache
+            docker compose up -d --remove-orphans
+
+            # Wait for backend to be healthy
+            echo "⏳ Waiting for backend to be healthy..."
+            timeout 60 bash -c 'until docker compose exec -T backend curl -f http://localhost:8000/health 2>/dev/null; do sleep 2; done'
+
+            # Run database migrations
+            echo "🗄️ Running database migrations..."
+            docker compose exec -T backend alembic upgrade head
+
+            # Cleanup old images
+            echo "🧹 Cleaning up old images..."
+            docker image prune -f
+
+            echo "✅ Deployment complete!"
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            cd ${{ secrets.PROJECT_PATH || '/opt/agentic-ai' }}
+
+            echo "🔍 Checking service status..."
+            docker compose ps
+
+            echo "🏥 Health check..."
+            curl -sf http://localhost:8000/health && echo " Backend OK" || echo " Backend FAILED"
+            curl -sf http://localhost:3000 && echo " Frontend OK" || echo " Frontend FAILED"
+
+      - name: Notify on failure
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            cd ${{ secrets.PROJECT_PATH || '/opt/agentic-ai' }}
+            echo "❌ Deployment failed! Rolling back..."
+            docker compose up -d --force-recreate

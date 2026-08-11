@@ -1,0 +1,7 @@
+{
+  "root": ".",
+  "include": ["app"],
+  "extraPaths": ["."],
+  "reportMissingImports": "warning",
+  "pythonVersion": "3.13"
+}
